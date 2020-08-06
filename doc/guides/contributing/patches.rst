@@ -28,9 +28,9 @@ The DPDK development process has the following features:
 * All sub-repositories are merged into main repository for ``-rc1`` and ``-rc2`` versions of the release.
 * After the ``-rc2`` release all patches should target the main repository.
 
-The mailing list for DPDK development is `dev@dpdk.org <http://mails.dpdk.org/archives/dev/>`_.
-Contributors will need to `register for the mailing list <http://mails.dpdk.org/listinfo/dev>`_ in order to submit patches.
-It is also worth registering for the DPDK `Patchwork <http://patches.dpdk.org/project/dpdk/list/>`_
+The mailing list for DPDK development is `dev@dpdk.org <https://mails.dpdk.org/archives/dev/>`_.
+Contributors will need to `register for the mailing list <https://mails.dpdk.org/listinfo/dev>`_ in order to submit patches.
+It is also worth registering for the DPDK `Patchwork <https://patches.dpdk.org/project/dpdk/list/>`_
 
 If you are using the GitHub service, you can link your repository to
 the ``travis-ci.org`` build service.  When you push patches to your GitHub
@@ -130,12 +130,12 @@ The source code can be cloned using either of the following:
 main repository::
 
     git clone git://dpdk.org/dpdk
-    git clone http://dpdk.org/git/dpdk
+    git clone https://dpdk.org/git/dpdk
 
-sub-repositories (`list <http://git.dpdk.org/next>`_)::
+sub-repositories (`list <https://git.dpdk.org/next>`_)::
 
     git clone git://dpdk.org/next/dpdk-next-*
-    git clone http://dpdk.org/git/next/dpdk-next-*
+    git clone https://dpdk.org/git/next/dpdk-next-*
 
 Make your Changes
 -----------------
@@ -182,7 +182,7 @@ A good way of thinking about whether a patch should be split is to consider whet
 applied without dependencies as a backport.
 
 It is better to keep the related documentation changes in the same patch
-file as the code, rather than one big documentation patch at then end of a
+file as the code, rather than one big documentation patch at the end of a
 patchset. This makes it easier for future maintenance and development of the
 code.
 
@@ -320,7 +320,7 @@ Patch for Stable Releases
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 All fix patches to the master branch that are candidates for backporting
-should also be CCed to the `stable@dpdk.org <http://mails.dpdk.org/listinfo/stable>`_
+should also be CCed to the `stable@dpdk.org <https://mails.dpdk.org/listinfo/stable>`_
 mailing list.
 In the commit message body the Cc: stable@dpdk.org should be inserted as follows::
 
@@ -407,14 +407,23 @@ This uses the Linux kernel development tool ``checkpatch.pl`` which  can be obta
 updating the Linux kernel sources.
 
 The path to the original Linux script must be set in the environment variable ``DPDK_CHECKPATCH_PATH``.
-This, and any other configuration variables required by the development tools, are loaded from the following
-files, in order of preference::
+
+Spell checking of commonly misspelled words
+can be enabled by downloading the codespell dictionary::
+
+   https://raw.githubusercontent.com/codespell-project/codespell/master/codespell_lib/data/dictionary.txt
+
+The path to the downloaded ``dictionary.txt`` must be set
+in the environment variable ``DPDK_CHECKPATCH_CODESPELL``.
+
+Environment variables required by the development tools,
+are loaded from the following files, in order of preference::
 
    .develconfig
    ~/.config/dpdk/devel.config
    /etc/dpdk/devel.config.
 
-Once the environment variable the script can be run as follows::
+Once the environment variable is set, the script can be run as follows::
 
    devtools/checkpatches.sh ~/patch/
 
@@ -471,6 +480,7 @@ Examples of configs are::
 The builds can be modified via the following environmental variables:
 
 * ``DPDK_BUILD_TEST_CONFIGS`` (target1+option1+option2 target2)
+* ``DPDK_BUILD_TEST_DIR``
 * ``DPDK_DEP_CFLAGS``
 * ``DPDK_DEP_LDFLAGS``
 * ``DPDK_DEP_PCAP`` (y/[n])
@@ -495,6 +505,12 @@ Compilation of patches is to be tested with ``devtools/test-meson-builds.sh`` sc
 
 The script internally checks for dependencies, then builds for several
 combinations of compilation configuration.
+By default, each build will be put in a subfolder of the current working directory.
+However, if it is preferred to place the builds in a different location,
+the environment variable ``DPDK_BUILD_TEST_DIR`` can be set to that desired location.
+For example, setting ``DPDK_BUILD_TEST_DIR=__builds`` will put all builds
+in a single subfolder called "__builds" created in the current directory.
+Setting ``DPDK_BUILD_TEST_DIR`` to an absolute directory path e.g. ``/tmp`` is also supported.
 
 
 Sending Patches
@@ -532,7 +548,7 @@ If the patch is in relation to a previous email thread you can add it to the sam
    git send-email --to dev@dpdk.org --in-reply-to <1234-foo@bar.com> 000*.patch
 
 The Message ID can be found in the raw text of emails or at the top of each Patchwork patch,
-`for example <http://patches.dpdk.org/patch/7646/>`_.
+`for example <https://patches.dpdk.org/patch/7646/>`_.
 Shallow threading (``--thread --no-chain-reply-to``) is preferred for a patch series.
 
 Once submitted your patches will appear on the mailing list and in Patchwork.

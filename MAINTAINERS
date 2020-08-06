@@ -143,13 +143,13 @@ M: Neil Horman <nhorman@tuxdriver.com>
 F: lib/librte_eal/common/include/rte_compat.h
 F: lib/librte_eal/common/include/rte_function_versioning.h
 F: doc/guides/rel_notes/deprecation.rst
-F: devtools/validate-abi.sh
+F: devtools/check-abi-version.sh
 F: devtools/check-symbol-change.sh
-F: buildtools/check-abi-version.sh
+F: devtools/update-abi.sh
+F: devtools/update_version_map_abi.py
+F: devtools/validate-abi.sh
 F: buildtools/check-experimental-syms.sh
 F: buildtools/map-list-symbol.sh
-F: buildtools/update-abi.sh
-F: buildtools/update_version_map_abi.py
 
 Driver information
 M: Neil Horman <nhorman@tuxdriver.com>
@@ -370,7 +370,7 @@ F: devtools/test-null.sh
 F: doc/guides/prog_guide/switch_representation.rst
 
 Flow API
-M: Adrien Mazarguil <adrien.mazarguil@6wind.com>
+M: Ori Kam <orika@mellanox.com>
 T: git://dpdk.org/next/dpdk-next-net
 F: app/test-pmd/cmdline_flow.c
 F: doc/guides/prog_guide/rte_flow.rst
@@ -774,7 +774,8 @@ F: doc/guides/nics/nfb.rst
 F: doc/guides/nics/features/nfb.ini
 
 Netronome nfp
-M: Alejandro Lucero <alejandro.lucero@netronome.com>
+M: Heinrich Kuhn <heinrich.kuhn@netronome.com>
+M: Jan Gutter <jan.gutter@netronome.com>
 F: drivers/net/nfp/
 F: doc/guides/nics/nfp.rst
 F: doc/guides/nics/features/nfp*.ini
@@ -871,7 +872,7 @@ F: doc/guides/nics/virtio.rst
 F: doc/guides/nics/features/virtio*.ini
 
 Wind River AVP
-M: Allain Legacy <allain.legacy@windriver.com>
+M: Steven Webster <steven.webster@windriver.com>
 M: Matt Peters <matt.peters@windriver.com>
 F: drivers/net/avp/
 F: doc/guides/nics/avp.rst
@@ -909,7 +910,7 @@ F: drivers/net/null/
 F: doc/guides/nics/features/null.ini
 
 Fail-safe PMD
-M: Gaetan Rivet <gaetan.rivet@6wind.com>
+M: Gaetan Rivet <grive@u256.net>
 F: drivers/net/failsafe/
 F: doc/guides/nics/fail_safe.rst
 F: doc/guides/nics/features/failsafe.ini
@@ -940,7 +941,7 @@ F: doc/guides/cryptodevs/ccp.rst
 F: doc/guides/cryptodevs/features/ccp.ini
 
 ARMv8 Crypto
-M: Jerin Jacob <jerinj@marvell.com>
+M: Ruifeng Wang <ruifeng.wang@arm.com>
 F: drivers/crypto/armv8/
 F: doc/guides/cryptodevs/armv8.rst
 F: doc/guides/cryptodevs/features/armv8.ini
@@ -1145,6 +1146,7 @@ Rawdev Drivers
 Intel FPGA
 M: Rosen Xu <rosen.xu@intel.com>
 M: Tianfei zhang <tianfei.zhang@intel.com>
+T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/raw/ifpga/
 F: doc/guides/rawdevs/ifpga.rst
 
@@ -1371,7 +1373,7 @@ F: app/test/test_rcu*
 F: doc/guides/prog_guide/rcu_lib.rst
 
 PCI
-M: Gaetan Rivet <gaetan.rivet@6wind.com>
+M: Gaetan Rivet <grive@u256.net>
 F: lib/librte_pci/
 
 Power management
@@ -1432,6 +1434,7 @@ Unit tests framework
 F: app/test/Makefile
 F: app/test/autotest*
 F: app/test/commands.c
+F: app/test/get-coremask.sh
 F: app/test/packet_burst_generator.c
 F: app/test/packet_burst_generator.h
 F: app/test/process.h
@@ -1529,6 +1532,7 @@ M: John McNamara <john.mcnamara@intel.com>
 F: examples/performance-thread/
 F: doc/guides/sample_app_ug/performance_thread.rst
 
+M: Kirill Rybalchenko <kirill.rybalchenko@intel.com>
 F: examples/ptpclient/
 
 M: Bruce Richardson <bruce.richardson@intel.com>

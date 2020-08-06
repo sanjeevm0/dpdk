@@ -979,7 +979,7 @@ check_socket_id(const unsigned int socket_id)
 queueid_t
 get_allowed_max_nb_rxq(portid_t *pid)
 {
-	queueid_t allowed_max_rxq = MAX_QUEUE_ID;
+	queueid_t allowed_max_rxq = RTE_MAX_QUEUES_PER_PORT;
 	bool max_rxq_valid = false;
 	portid_t pi;
 	struct rte_eth_dev_info dev_info;
@@ -1029,7 +1029,7 @@ check_nb_rxq(queueid_t rxq)
 queueid_t
 get_allowed_max_nb_txq(portid_t *pid)
 {
-	queueid_t allowed_max_txq = MAX_QUEUE_ID;
+	queueid_t allowed_max_txq = RTE_MAX_QUEUES_PER_PORT;
 	bool max_txq_valid = false;
 	portid_t pi;
 	struct rte_eth_dev_info dev_info;
@@ -1079,7 +1079,7 @@ check_nb_txq(queueid_t txq)
 queueid_t
 get_allowed_max_nb_hairpinq(portid_t *pid)
 {
-	queueid_t allowed_max_hairpinq = MAX_QUEUE_ID;
+	queueid_t allowed_max_hairpinq = RTE_MAX_QUEUES_PER_PORT;
 	portid_t pi;
 	struct rte_eth_hairpin_cap cap;
 
@@ -2549,32 +2549,17 @@ setup_attached_port(portid_t pi)
 	printf("Done\n");
 }
 
-void
-detach_port_device(portid_t port_id)
+static void
+detach_device(struct rte_device *dev)
 {
-	struct rte_device *dev;
 	portid_t sibling;
 
-	printf("Removing a device...\n");
-
-	if (port_id_is_invalid(port_id, ENABLED_WARN))
-		return;
-
-	dev = rte_eth_devices[port_id].device;
 	if (dev == NULL) {
 		printf("Device already removed\n");
 		return;
 	}
 
-	if (ports[port_id].port_status != RTE_PORT_CLOSED) {
-		if (ports[port_id].port_status != RTE_PORT_STOPPED) {
-			printf("Port not stopped\n");
-			return;
-		}
-		printf("Port was not closed\n");
-		if (ports[port_id].flow_list)
-			port_flow_flush(port_id);
-	}
+	printf("Removing a device...\n");
 
 	if (rte_dev_remove(dev) < 0) {
 		TESTPMD_LOG(ERR, "Failed to detach device %s\n", dev->name);
@@ -2592,14 +2577,33 @@ detach_port_device(portid_t port_id)
 
 	remove_invalid_ports();
 
-	printf("Device of port %u is detached\n", port_id);
+	printf("Device is detached\n");
 	printf("Now total ports is %d\n", nb_ports);
 	printf("Done\n");
 	return;
 }
 
 void
-detach_device(char *identifier)
+detach_port_device(portid_t port_id)
+{
+	if (port_id_is_invalid(port_id, ENABLED_WARN))
+		return;
+
+	if (ports[port_id].port_status != RTE_PORT_CLOSED) {
+		if (ports[port_id].port_status != RTE_PORT_STOPPED) {
+			printf("Port not stopped\n");
+			return;
+		}
+		printf("Port was not closed\n");
+		if (ports[port_id].flow_list)
+			port_flow_flush(port_id);
+	}
+
+	detach_device(rte_eth_devices[port_id].device);
+}
+
+void
+detach_devargs(char *identifier)
 {
 	struct rte_dev_iterator iterator;
 	struct rte_devargs da;
@@ -2619,6 +2623,7 @@ detach_device(char *identifier)
 		if (ports[port_id].port_status != RTE_PORT_CLOSED) {
 			if (ports[port_id].port_status != RTE_PORT_STOPPED) {
 				printf("Port %u not stopped\n", port_id);
+				rte_eth_iterator_cleanup(&iterator);
 				return;
 			}
 
@@ -2747,7 +2752,7 @@ check_all_ports_link_status(uint32_t port_mask)
 					"Port%d Link Up. speed %u Mbps- %s\n",
 					portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
+					("full-duplex") : ("half-duplex"));
 				else
 					printf("Port %d Link Down\n", portid);
 				continue;
@@ -2789,6 +2794,7 @@ rmv_port_callback(void *arg)
 	int need_to_start = 0;
 	int org_no_link_check = no_link_check;
 	portid_t port_id = (intptr_t)arg;
+	struct rte_device *dev;
 
 	RTE_ETH_VALID_PORTID_OR_RET(port_id);
 
@@ -2799,8 +2805,12 @@ rmv_port_callback(void *arg)
 	no_link_check = 1;
 	stop_port(port_id);
 	no_link_check = org_no_link_check;
+
+	/* Save rte_device pointer before closing ethdev port */
+	dev = rte_eth_devices[port_id].device;
 	close_port(port_id);
-	detach_port_device(port_id);
+	detach_device(dev); /* might be already removed or have more ports */
+
 	if (need_to_start)
 		start_packet_forwarding(0);
 }
@@ -3182,6 +3192,8 @@ get_eth_dcb_conf(portid_t pid, struct rte_eth_conf *eth_conf,
 				&eth_conf->rx_adv_conf.dcb_rx_conf;
 		struct rte_eth_dcb_tx_conf *tx_conf =
 				&eth_conf->tx_adv_conf.dcb_tx_conf;
+
+		memset(&rss_conf, 0, sizeof(struct rte_eth_rss_conf));
 
 		rc = rte_eth_dev_rss_hash_conf_get(pid, &rss_conf);
 		if (rc != 0)
@@ -3569,5 +3581,10 @@ main(int argc, char** argv)
 			return 1;
 	}
 
-	return 0;
+	ret = rte_eal_cleanup();
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			 "EAL cleanup failed: %s\n", strerror(-ret));
+
+	return EXIT_SUCCESS;
 }

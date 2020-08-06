@@ -75,12 +75,13 @@ struct bnxt_vnic_info *bnxt_alloc_vnic(struct bnxt *bp)
 
 void bnxt_free_all_vnics(struct bnxt *bp)
 {
-	struct bnxt_vnic_info *temp;
+	struct bnxt_vnic_info *vnic;
 	unsigned int i;
 
-	for (i = 0; i < bp->nr_vnics; i++) {
-		temp = &bp->vnic_info[i];
-		STAILQ_INSERT_TAIL(&bp->free_vnic_list, temp, next);
+	for (i = 0; i < bp->max_vnics; i++) {
+		vnic = &bp->vnic_info[i];
+		STAILQ_INSERT_TAIL(&bp->free_vnic_list, vnic, next);
+		vnic->rx_queue_cnt = 0;
 	}
 }
 
@@ -149,17 +150,6 @@ int bnxt_alloc_vnic_attributes(struct bnxt *bp)
 			return -ENOMEM;
 	}
 	mz_phys_addr = mz->iova;
-	if ((unsigned long)mz->addr == mz_phys_addr) {
-		PMD_DRV_LOG(DEBUG,
-			    "Memzone physical address same as virtual.\n");
-		PMD_DRV_LOG(DEBUG, "Using rte_mem_virt2iova()\n");
-		mz_phys_addr = rte_mem_virt2iova(mz->addr);
-		if (mz_phys_addr == RTE_BAD_IOVA) {
-			PMD_DRV_LOG(ERR,
-				    "unable to map to physical memory\n");
-			return -ENOMEM;
-		}
-	}
 
 	for (i = 0; i < max_vnics; i++) {
 		vnic = &bp->vnic_info[i];

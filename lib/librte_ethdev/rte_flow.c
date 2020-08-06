@@ -19,7 +19,7 @@
 #include "rte_flow.h"
 
 /* Mbuf dynamic field name for metadata. */
-int rte_flow_dynf_metadata_offs = -1;
+int32_t rte_flow_dynf_metadata_offs = -1;
 
 /* Mbuf dynamic field flag bit number for metadata. */
 uint64_t rte_flow_dynf_metadata_mask;
@@ -1071,6 +1071,7 @@ rte_flow_expand_rss(struct rte_flow_expand_rss *buf, size_t size,
 	int elt = 0;
 	const struct rte_flow_item *last_item = NULL;
 
+	memset(&missed_item, 0, sizeof(missed_item));
 	lsize = offsetof(struct rte_flow_expand_rss, entry) +
 		elt_n * sizeof(buf->entry[0]);
 	if (lsize <= size) {

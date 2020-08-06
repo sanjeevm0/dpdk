@@ -62,6 +62,9 @@
 /* Device parameter to configure log 2 of the number of strides for MPRQ. */
 #define MLX5_RX_MPRQ_LOG_STRIDE_NUM "mprq_log_stride_num"
 
+/* Device parameter to configure log 2 of the stride size for MPRQ. */
+#define MLX5_RX_MPRQ_LOG_STRIDE_SIZE "mprq_log_stride_size"
+
 /* Device parameter to limit the size of memcpy'd packet for MPRQ. */
 #define MLX5_RX_MPRQ_MAX_MEMCPY_LEN "mprq_max_memcpy_len"
 
@@ -184,6 +187,10 @@ struct mlx5_dev_spawn_data {
 	struct rte_pci_device *pci_dev; /**< Backend PCI device. */
 };
 
+#ifdef MLX5_GLUE
+const struct mlx5_glue *mlx5_glue;
+#endif
+
 static LIST_HEAD(, mlx5_ibv_shared) mlx5_ibv_list = LIST_HEAD_INITIALIZER();
 static pthread_mutex_t mlx5_ibv_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -196,11 +203,14 @@ static pthread_mutex_t mlx5_ibv_list_mutex = PTHREAD_MUTEX_INITIALIZER;
 /**
  * Allocate ID pool structure.
  *
+ * @param[in] max_id
+ *   The maximum id can be allocated from the pool.
+ *
  * @return
  *   Pointer to pool object, NULL value otherwise.
  */
 struct mlx5_flow_id_pool *
-mlx5_flow_id_pool_alloc(void)
+mlx5_flow_id_pool_alloc(uint32_t max_id)
 {
 	struct mlx5_flow_id_pool *pool;
 	void *mem;
@@ -223,6 +233,7 @@ mlx5_flow_id_pool_alloc(void)
 	pool->curr = pool->free_arr;
 	pool->last = pool->free_arr + MLX5_FLOW_MIN_ID_POOL_SIZE;
 	pool->base_index = 0;
+	pool->max_id = max_id;
 	return pool;
 error:
 	rte_free(pool);
@@ -257,7 +268,7 @@ uint32_t
 mlx5_flow_id_get(struct mlx5_flow_id_pool *pool, uint32_t *id)
 {
 	if (pool->curr == pool->free_arr) {
-		if (pool->base_index == UINT32_MAX) {
+		if (pool->base_index == pool->max_id) {
 			rte_errno  = ENOMEM;
 			DRV_LOG(ERR, "no free id");
 			return -rte_errno;
@@ -590,7 +601,7 @@ mlx5_alloc_shared_ibctx(const struct mlx5_dev_spawn_data *spawn,
 			goto error;
 		}
 	}
-	sh->flow_id_pool = mlx5_flow_id_pool_alloc();
+	sh->flow_id_pool = mlx5_flow_id_pool_alloc(UINT32_MAX);
 	if (!sh->flow_id_pool) {
 		DRV_LOG(ERR, "can't create flow id pool");
 		err = ENOMEM;
@@ -673,12 +684,12 @@ mlx5_free_shared_ibctx(struct mlx5_ibv_shared *sh)
 	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	if (--sh->refcnt)
 		goto exit;
-	/* Release created Memory Regions. */
-	mlx5_mr_release(sh);
 	/* Remove from memory callback device list. */
 	rte_rwlock_write_lock(&mlx5_shared_data->mem_event_rwlock);
 	LIST_REMOVE(sh, mem_event_cb);
 	rte_rwlock_write_unlock(&mlx5_shared_data->mem_event_rwlock);
+	/* Release created Memory Regions. */
+	mlx5_mr_release(sh);
 	/* Remove context from the global device list. */
 	LIST_REMOVE(sh, next);
 	/*
@@ -866,13 +877,26 @@ error:
 static int
 mlx5_alloc_shared_dr(struct mlx5_priv *priv)
 {
-	int err = mlx5_alloc_table_hash_list(priv);
-
-	if (err)
-		return err;
-#ifdef HAVE_MLX5DV_DR
 	struct mlx5_ibv_shared *sh = priv->sh;
 	char s[MLX5_HLIST_NAMESIZE];
+	int err = 0;
+
+	if (!sh->flow_tbls)
+		err = mlx5_alloc_table_hash_list(priv);
+	else
+		DRV_LOG(DEBUG, "sh->flow_tbls[%p] already created, reuse\n",
+			(void *)sh->flow_tbls);
+	if (err)
+		return err;
+	/* Create tags hash list table. */
+	snprintf(s, sizeof(s), "%s_tags", sh->ibdev_name);
+	sh->tag_table = mlx5_hlist_create(s, MLX5_TAGS_HLIST_ARRAY_SIZE);
+	if (!sh->tag_table) {
+		DRV_LOG(ERR, "tags with hash creation failed.\n");
+		err = ENOMEM;
+		goto error;
+	}
+#ifdef HAVE_MLX5DV_DR
 	void *domain;
 
 	if (sh->dv_refcnt) {
@@ -912,20 +936,13 @@ mlx5_alloc_shared_dr(struct mlx5_priv *priv)
 		sh->esw_drop_action = mlx5_glue->dr_create_flow_action_drop();
 	}
 #endif
-	/* create tags hash list table. */
-	snprintf(s, sizeof(s), "%s_tags", priv->sh->ibdev_name);
-	sh->tag_table = mlx5_hlist_create(s, MLX5_TAGS_HLIST_ARRAY_SIZE);
-	if (!sh->flow_tbls) {
-		DRV_LOG(ERR, "tags with hash creation failed.\n");
-		goto error;
-	}
 	sh->pop_vlan_action = mlx5_glue->dr_create_flow_action_pop_vlan();
+#endif /* HAVE_MLX5DV_DR */
 	sh->dv_refcnt++;
 	priv->dr_shared = 1;
 	return 0;
-
 error:
-       /* Rollback the created objects. */
+	/* Rollback the created objects. */
 	if (sh->rx_domain) {
 		mlx5_glue->dr_destroy_domain(sh->rx_domain);
 		sh->rx_domain = NULL;
@@ -946,8 +963,12 @@ error:
 		mlx5_glue->destroy_flow_action(sh->pop_vlan_action);
 		sh->pop_vlan_action = NULL;
 	}
+	if (sh->tag_table) {
+		/* tags should be destroyed with flow before. */
+		mlx5_hlist_destroy(sh->tag_table, NULL, NULL);
+		sh->tag_table = NULL;
+	}
 	mlx5_free_table_hash_list(priv);
-#endif
 	return err;
 }
 
@@ -960,7 +981,6 @@ error:
 static void
 mlx5_free_shared_dr(struct mlx5_priv *priv)
 {
-#ifdef HAVE_MLX5DV_DR
 	struct mlx5_ibv_shared *sh;
 
 	if (!priv->dr_shared)
@@ -968,6 +988,7 @@ mlx5_free_shared_dr(struct mlx5_priv *priv)
 	priv->dr_shared = 0;
 	sh = priv->sh;
 	assert(sh);
+#ifdef HAVE_MLX5DV_DR
 	assert(sh->dv_refcnt);
 	if (sh->dv_refcnt && --sh->dv_refcnt)
 		return;
@@ -989,17 +1010,17 @@ mlx5_free_shared_dr(struct mlx5_priv *priv)
 		sh->esw_drop_action = NULL;
 	}
 #endif
-	if (sh->tag_table) {
-		/* tags should be destroyed with flow before. */
-		mlx5_hlist_destroy(sh->tag_table, NULL, NULL);
-		sh->tag_table = NULL;
-	}
 	if (sh->pop_vlan_action) {
 		mlx5_glue->destroy_flow_action(sh->pop_vlan_action);
 		sh->pop_vlan_action = NULL;
 	}
 	pthread_mutex_destroy(&sh->dv_mutex);
 #endif /* HAVE_MLX5DV_DR */
+	if (sh->tag_table) {
+		/* tags should be destroyed with flow before. */
+		mlx5_hlist_destroy(sh->tag_table, NULL, NULL);
+		sh->tag_table = NULL;
+	}
 	mlx5_free_table_hash_list(priv);
 }
 
@@ -1485,6 +1506,8 @@ mlx5_args_check(const char *key, const char *val, void *opaque)
 		config->mprq.enabled = !!tmp;
 	} else if (strcmp(MLX5_RX_MPRQ_LOG_STRIDE_NUM, key) == 0) {
 		config->mprq.stride_num_n = tmp;
+	} else if (strcmp(MLX5_RX_MPRQ_LOG_STRIDE_SIZE, key) == 0) {
+		config->mprq.stride_size_n = tmp;
 	} else if (strcmp(MLX5_RX_MPRQ_MAX_MEMCPY_LEN, key) == 0) {
 		config->mprq.max_memcpy_len = tmp;
 	} else if (strcmp(MLX5_RXQS_MIN_MPRQ, key) == 0) {
@@ -1577,6 +1600,7 @@ mlx5_args(struct mlx5_dev_config *config, struct rte_devargs *devargs)
 		MLX5_RXQ_PKT_PAD_EN,
 		MLX5_RX_MPRQ_EN,
 		MLX5_RX_MPRQ_LOG_STRIDE_NUM,
+		MLX5_RX_MPRQ_LOG_STRIDE_SIZE,
 		MLX5_RX_MPRQ_MAX_MEMCPY_LEN,
 		MLX5_RXQS_MIN_MPRQ,
 		MLX5_TXQ_INLINE,
@@ -1692,7 +1716,7 @@ out:
  *   key is specified in devargs
  * - if DevX is enabled the inline mode is queried from the
  *   device (HCA attributes and NIC vport context if needed).
- * - otherwise L2 mode (18 bytes) is assumed for ConnectX-4/4LX
+ * - otherwise L2 mode (18 bytes) is assumed for ConnectX-4/4 Lx
  *   and none (0 bytes) for other NICs
  *
  * @param spawn
@@ -1926,9 +1950,9 @@ mlx5_get_dbr(struct rte_eth_dev *dev, struct mlx5_devx_dbr_page **dbr_page)
 	     i++)
 		; /* Empty. */
 	/* Find the first clear bit. */
+	assert(i < MLX5_DBR_BITMAP_SIZE);
 	j = rte_bsf64(~page->dbr_bitmap[i]);
-	assert(i < (MLX5_DBR_PER_PAGE / 64));
-	page->dbr_bitmap[i] |= (1 << j);
+	page->dbr_bitmap[i] |= (UINT64_C(1) << j);
 	page->dbr_count++;
 	*dbr_page = page;
 	return (((i * 64) + j) * sizeof(uint64_t));
@@ -1973,7 +1997,7 @@ mlx5_release_dbr(struct rte_eth_dev *dev, uint32_t umem_id, uint64_t offset)
 		int i = offset / 64;
 		int j = offset % 64;
 
-		page->dbr_bitmap[i] &= ~(1 << j);
+		page->dbr_bitmap[i] &= ~(UINT64_C(1) << j);
 	}
 	return ret;
 }
@@ -2231,8 +2255,6 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 			mprq_caps.min_single_wqe_log_num_of_strides;
 		mprq_max_stride_num_n =
 			mprq_caps.max_single_wqe_log_num_of_strides;
-		config.mprq.stride_num_n = RTE_MAX(MLX5_MPRQ_STRIDE_NUM_N,
-						   mprq_min_stride_num_n);
 	}
 #endif
 	if (RTE_CACHE_LINE_SIZE == 128 &&
@@ -2251,7 +2273,9 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 		tunnel_en = ((dv_attr.tunnel_offloads_caps &
 			      MLX5DV_RAW_PACKET_CAP_TUNNELED_OFFLOAD_VXLAN) &&
 			     (dv_attr.tunnel_offloads_caps &
-			      MLX5DV_RAW_PACKET_CAP_TUNNELED_OFFLOAD_GRE));
+			      MLX5DV_RAW_PACKET_CAP_TUNNELED_OFFLOAD_GRE) &&
+			     (dv_attr.tunnel_offloads_caps &
+			      MLX5DV_RAW_PACKET_CAP_TUNNELED_OFFLOAD_GENEVE));
 	}
 	DRV_LOG(DEBUG, "tunnel offloading is %ssupported",
 		tunnel_en ? "" : "not ");
@@ -2423,7 +2447,7 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	!defined(HAVE_IBV_DEVICE_COUNTERS_SET_V45)
 	DRV_LOG(DEBUG, "counters are not supported");
 #endif
-#ifndef HAVE_IBV_FLOW_DV_SUPPORT
+#if !defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_MLX5DV_DR)
 	if (config.dv_flow_en) {
 		DRV_LOG(WARNING, "DV flow is not supported");
 		config.dv_flow_en = 0;
@@ -2474,7 +2498,8 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	else
 		config.mps = config.mps ? mps : MLX5_MPW_DISABLED;
 	DRV_LOG(INFO, "%sMPS is %s",
-		config.mps == MLX5_MPW_ENHANCED ? "enhanced " : "",
+		config.mps == MLX5_MPW_ENHANCED ? "enhanced " :
+		config.mps == MLX5_MPW ? "legacy " : "",
 		config.mps != MLX5_MPW_DISABLED ? "enabled" : "disabled");
 	if (config.cqe_comp && !cqe_comp) {
 		DRV_LOG(WARNING, "Rx CQE compression isn't supported");
@@ -2535,6 +2560,8 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 				priv->mtr_color_reg = ffs(reg_c_mask) - 1 +
 						      REG_C_0;
 				priv->mtr_en = 1;
+				priv->mtr_reg_share =
+				      config.hca_attr.qos.flow_meter_reg_share;
 				DRV_LOG(DEBUG, "The REG_C meter uses is %d",
 					priv->mtr_color_reg);
 			}
@@ -2542,16 +2569,31 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 #endif
 	}
 	if (config.mprq.enabled && mprq) {
-		if (config.mprq.stride_num_n > mprq_max_stride_num_n ||
-		    config.mprq.stride_num_n < mprq_min_stride_num_n) {
+		if (config.mprq.stride_num_n &&
+		    (config.mprq.stride_num_n > mprq_max_stride_num_n ||
+		     config.mprq.stride_num_n < mprq_min_stride_num_n)) {
 			config.mprq.stride_num_n =
-				RTE_MAX(MLX5_MPRQ_STRIDE_NUM_N,
-					mprq_min_stride_num_n);
+				RTE_MIN(RTE_MAX(MLX5_MPRQ_STRIDE_NUM_N,
+						mprq_min_stride_num_n),
+					mprq_max_stride_num_n);
 			DRV_LOG(WARNING,
 				"the number of strides"
 				" for Multi-Packet RQ is out of range,"
 				" setting default value (%u)",
 				1 << config.mprq.stride_num_n);
+		}
+		if (config.mprq.stride_size_n &&
+		    (config.mprq.stride_size_n > mprq_max_stride_size_n ||
+		     config.mprq.stride_size_n < mprq_min_stride_size_n)) {
+			config.mprq.stride_size_n =
+				RTE_MIN(RTE_MAX(MLX5_MPRQ_STRIDE_SIZE_N,
+						mprq_min_stride_size_n),
+					mprq_max_stride_size_n);
+			DRV_LOG(WARNING,
+				"the size of a stride"
+				" for Multi-Packet RQ is out of range,"
+				" setting default value (%u)",
+				1 << config.mprq.stride_size_n);
 		}
 		config.mprq.min_stride_size_n = mprq_min_stride_size_n;
 		config.mprq.max_stride_size_n = mprq_max_stride_size_n;
@@ -2667,7 +2709,12 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 		err = mlx5_alloc_shared_dr(priv);
 		if (err)
 			goto error;
-		priv->qrss_id_pool = mlx5_flow_id_pool_alloc();
+		/*
+		 * RSS id is shared with meter flow id. Meter flow id can only
+		 * use the 24 MSB of the register.
+		 */
+		priv->qrss_id_pool = mlx5_flow_id_pool_alloc(UINT32_MAX >>
+				     MLX5_MTR_COLOR_BITS);
 		if (!priv->qrss_id_pool) {
 			DRV_LOG(ERR, "can't create flow id pool");
 			err = ENOMEM;
@@ -3066,7 +3113,7 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		/*
 		 * Single IB device with multiple ports found,
 		 * it may be E-Switch master device and representors.
-		 * We have to perform identification trough the ports.
+		 * We have to perform identification through the ports.
 		 */
 		assert(nl_rdma >= 0);
 		assert(ns == 0);
@@ -3266,7 +3313,8 @@ mlx5_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		.mr_ext_memseg_en = 1,
 		.mprq = {
 			.enabled = 0, /* Disabled by default. */
-			.stride_num_n = MLX5_MPRQ_STRIDE_NUM_N,
+			.stride_num_n = 0,
+			.stride_size_n = 0,
 			.max_memcpy_len = MLX5_MPRQ_MEMCPY_DEFAULT_LEN,
 			.min_rxqs_num = MLX5_MPRQ_MIN_RXQS,
 		},

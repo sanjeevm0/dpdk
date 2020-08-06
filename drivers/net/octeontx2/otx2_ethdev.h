@@ -192,6 +192,7 @@ struct otx2_eth_qconf {
 	void *mempool;
 	uint32_t socket_id;
 	uint16_t nb_desc;
+	uint8_t valid;
 };
 
 struct otx2_fc_info {
@@ -276,6 +277,7 @@ struct otx2_eth_dev {
 	uint8_t configured_cints;
 	uint8_t configured_nb_rx_qs;
 	uint8_t configured_nb_tx_qs;
+	uint8_t ptype_disable;
 	uint16_t nix_msixoff;
 	uintptr_t base;
 	uintptr_t lmt_addr;
@@ -437,6 +439,8 @@ int oxt2_nix_register_cq_irqs(struct rte_eth_dev *eth_dev);
 void otx2_nix_unregister_irqs(struct rte_eth_dev *eth_dev);
 void oxt2_nix_unregister_queue_irqs(struct rte_eth_dev *eth_dev);
 void oxt2_nix_unregister_cq_irqs(struct rte_eth_dev *eth_dev);
+void otx2_nix_err_intr_enb_dis(struct rte_eth_dev *eth_dev, bool enb);
+void otx2_nix_ras_intr_enb_dis(struct rte_eth_dev *eth_dev, bool enb);
 
 int otx2_nix_rx_queue_intr_enable(struct rte_eth_dev *eth_dev,
 				  uint16_t rx_queue_id);
@@ -503,6 +507,8 @@ int otx2_cgx_mac_addr_set(struct rte_eth_dev *eth_dev,
 			  struct rte_ether_addr *addr);
 
 /* Flow Control */
+int otx2_nix_flow_ctrl_init(struct rte_eth_dev *eth_dev);
+
 int otx2_nix_flow_ctrl_get(struct rte_eth_dev *eth_dev,
 			   struct rte_eth_fc_conf *fc_conf);
 

@@ -366,6 +366,7 @@ struct rte_flow {
 };
 
 struct ixgbe_macsec_setting {
+	uint8_t offload_en;
 	uint8_t encrypt_en;
 	uint8_t replayprotect_en;
 };
@@ -509,6 +510,9 @@ struct ixgbe_adapter {
 	 * mailbox status) link status.
 	 */
 	uint8_t pflink_fullchk;
+	uint8_t mac_ctrl_frame_fwd;
+	rte_atomic32_t link_thread_running;
+	pthread_t link_thread_tid;
 };
 
 struct ixgbe_vf_representor {

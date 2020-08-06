@@ -67,7 +67,11 @@
 	ICE_FDIR_INSET_VXLAN_IPV4 | \
 	ICE_INSET_TUN_SCTP_SRC_PORT | ICE_INSET_TUN_SCTP_DST_PORT)
 
-#define ICE_FDIR_INSET_GTPU_IPV4 (\
+#define ICE_FDIR_INSET_GTPU (\
+	ICE_INSET_IPV4_SRC | ICE_INSET_IPV4_DST | ICE_INSET_GTPU_TEID)
+
+#define ICE_FDIR_INSET_GTPU_EH (\
+	ICE_INSET_IPV4_SRC | ICE_INSET_IPV4_DST | \
 	ICE_INSET_GTPU_TEID | ICE_INSET_GTPU_QFI)
 
 static struct ice_pattern_match_item ice_fdir_pattern_os[] = {
@@ -122,11 +126,15 @@ static struct ice_pattern_match_item ice_fdir_pattern_comms[] = {
 				       ICE_FDIR_INSET_VXLAN_IPV4_TCP,        ICE_INSET_NONE},
 	{pattern_eth_ipv4_udp_vxlan_eth_ipv4_sctp,
 				       ICE_FDIR_INSET_VXLAN_IPV4_SCTP,       ICE_INSET_NONE},
-	{pattern_eth_ipv4_gtpu_ipv4,   ICE_FDIR_INSET_GTPU_IPV4,             ICE_INSET_NONE},
+	{pattern_eth_ipv4_gtpu,	       ICE_FDIR_INSET_GTPU,                  ICE_INSET_NONE},
+	{pattern_eth_ipv4_gtpu_eh,     ICE_FDIR_INSET_GTPU_EH,               ICE_INSET_NONE},
 };
 
 static struct ice_flow_parser ice_fdir_parser_os;
 static struct ice_flow_parser ice_fdir_parser_comms;
+
+static int
+ice_fdir_is_tunnel_profile(enum ice_fdir_tunnel_type tunnel_type);
 
 static const struct rte_memzone *
 ice_memzone_reserve(const char *name, uint32_t len, int socket_id)
@@ -654,6 +662,156 @@ ice_fdir_teardown(struct ice_pf *pf)
 }
 
 static int
+ice_fdir_cur_prof_conflict(struct ice_pf *pf,
+			   enum ice_fltr_ptype ptype,
+			   struct ice_flow_seg_info *seg,
+			   bool is_tunnel)
+{
+	struct ice_hw *hw = ICE_PF_TO_HW(pf);
+	struct ice_flow_seg_info *ori_seg;
+	struct ice_fd_hw_prof *hw_prof;
+
+	hw_prof = hw->fdir_prof[ptype];
+	ori_seg = hw_prof->fdir_seg[is_tunnel];
+
+	/* profile does not exist */
+	if (!ori_seg)
+		return 0;
+
+	/* if no input set conflict, return -EEXIST */
+	if ((!is_tunnel && !memcmp(ori_seg, seg, sizeof(*seg))) ||
+	    (is_tunnel && !memcmp(&ori_seg[1], &seg[1], sizeof(*seg)))) {
+		PMD_DRV_LOG(DEBUG, "Profile already exists for flow type %d.",
+			    ptype);
+		return -EEXIST;
+	}
+
+	/* a rule with input set conflict already exist, so give up */
+	if (pf->fdir_fltr_cnt[ptype][is_tunnel]) {
+		PMD_DRV_LOG(DEBUG, "Failed to create profile for flow type %d due to conflict with existing rule.",
+			    ptype);
+		return -EINVAL;
+	}
+
+	/* it's safe to delete an empty profile */
+	ice_fdir_prof_rm(pf, ptype, is_tunnel);
+	return 0;
+}
+
+static bool
+ice_fdir_prof_resolve_conflict(struct ice_pf *pf,
+			       enum ice_fltr_ptype ptype,
+			       bool is_tunnel)
+{
+	struct ice_hw *hw = ICE_PF_TO_HW(pf);
+	struct ice_fd_hw_prof *hw_prof;
+	struct ice_flow_seg_info *seg;
+
+	hw_prof = hw->fdir_prof[ptype];
+	seg = hw_prof->fdir_seg[is_tunnel];
+
+	/* profile does not exist */
+	if (!seg)
+		return true;
+
+	/* profile exists and rule exists, fail to resolve the conflict */
+	if (pf->fdir_fltr_cnt[ptype][is_tunnel] != 0)
+		return false;
+
+	/* it's safe to delete an empty profile */
+	ice_fdir_prof_rm(pf, ptype, is_tunnel);
+
+	return true;
+}
+
+static int
+ice_fdir_cross_prof_conflict(struct ice_pf *pf,
+			     enum ice_fltr_ptype ptype,
+			     bool is_tunnel)
+{
+	enum ice_fltr_ptype cflct_ptype;
+
+	switch (ptype) {
+	/* IPv4 */
+	case ICE_FLTR_PTYPE_NONF_IPV4_UDP:
+	case ICE_FLTR_PTYPE_NONF_IPV4_TCP:
+	case ICE_FLTR_PTYPE_NONF_IPV4_SCTP:
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV4_OTHER:
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_UDP;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_TCP;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_SCTP;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		break;
+	/* IPv4 GTPU */
+	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_UDP:
+	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_TCP:
+	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_ICMP:
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER:
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		break;
+	/* IPv6 */
+	case ICE_FLTR_PTYPE_NONF_IPV6_UDP:
+	case ICE_FLTR_PTYPE_NONF_IPV6_TCP:
+	case ICE_FLTR_PTYPE_NONF_IPV6_SCTP:
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_OTHER;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV6_OTHER:
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_UDP;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_TCP;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		cflct_ptype = ICE_FLTR_PTYPE_NONF_IPV6_SCTP;
+		if (!ice_fdir_prof_resolve_conflict
+			(pf, cflct_ptype, is_tunnel))
+			goto err;
+		break;
+	default:
+		break;
+	}
+	return 0;
+err:
+	PMD_DRV_LOG(DEBUG, "Failed to create profile for flow type %d due to conflict with existing rule of flow type %d.",
+		    ptype, cflct_ptype);
+	return -EINVAL;
+}
+
+static int
 ice_fdir_hw_tbl_conf(struct ice_pf *pf, struct ice_vsi *vsi,
 		     struct ice_vsi *ctrl_vsi,
 		     struct ice_flow_seg_info *seg,
@@ -662,7 +820,6 @@ ice_fdir_hw_tbl_conf(struct ice_pf *pf, struct ice_vsi *vsi,
 {
 	struct ice_hw *hw = ICE_PF_TO_HW(pf);
 	enum ice_flow_dir dir = ICE_FLOW_RX;
-	struct ice_flow_seg_info *ori_seg;
 	struct ice_fd_hw_prof *hw_prof;
 	struct ice_flow_prof *prof;
 	uint64_t entry_1 = 0;
@@ -671,22 +828,15 @@ ice_fdir_hw_tbl_conf(struct ice_pf *pf, struct ice_vsi *vsi,
 	int ret;
 	uint64_t prof_id;
 
-	hw_prof = hw->fdir_prof[ptype];
-	ori_seg = hw_prof->fdir_seg[is_tunnel];
-	if (ori_seg) {
-		if (!is_tunnel) {
-			if (!memcmp(ori_seg, seg, sizeof(*seg)))
-				return -EAGAIN;
-		} else {
-			if (!memcmp(&ori_seg[1], &seg[1], sizeof(*seg)))
-				return -EAGAIN;
-		}
+	/* check if have input set conflict on current profile. */
+	ret = ice_fdir_cur_prof_conflict(pf, ptype, seg, is_tunnel);
+	if (ret)
+		return ret;
 
-		if (pf->fdir_fltr_cnt[ptype][is_tunnel])
-			return -EINVAL;
-
-		ice_fdir_prof_rm(pf, ptype, is_tunnel);
-	}
+	/* check if the profile is conflict with other profile. */
+	ret = ice_fdir_cross_prof_conflict(pf, ptype, is_tunnel);
+	if (ret)
+		return ret;
 
 	prof_id = ptype + is_tunnel * ICE_FLTR_PTYPE_MAX;
 	ret = ice_flow_add_prof(hw, ICE_BLK_FD, dir, prof_id, seg,
@@ -710,6 +860,7 @@ ice_fdir_hw_tbl_conf(struct ice_pf *pf, struct ice_vsi *vsi,
 		goto err_add_entry;
 	}
 
+	hw_prof = hw->fdir_prof[ptype];
 	pf->hw_prof_cnt[ptype][is_tunnel] = 0;
 	hw_prof->cnt = 0;
 	hw_prof->fdir_seg[is_tunnel] = seg;
@@ -767,7 +918,7 @@ ice_fdir_input_set_parse(uint64_t inset, enum ice_flow_field *field)
 		{ICE_INSET_TUN_UDP_DST_PORT, ICE_FLOW_FIELD_IDX_UDP_DST_PORT},
 		{ICE_INSET_TUN_SCTP_SRC_PORT, ICE_FLOW_FIELD_IDX_SCTP_SRC_PORT},
 		{ICE_INSET_TUN_SCTP_DST_PORT, ICE_FLOW_FIELD_IDX_SCTP_DST_PORT},
-		{ICE_INSET_GTPU_TEID, ICE_FLOW_FIELD_IDX_GTPU_EH_TEID},
+		{ICE_INSET_GTPU_TEID, ICE_FLOW_FIELD_IDX_GTPU_IP_TEID},
 		{ICE_INSET_GTPU_QFI, ICE_FLOW_FIELD_IDX_GTPU_EH_QFI},
 	};
 
@@ -780,11 +931,12 @@ ice_fdir_input_set_parse(uint64_t inset, enum ice_flow_field *field)
 
 static int
 ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
-			uint64_t input_set, bool is_tunnel)
+			uint64_t input_set, enum ice_fdir_tunnel_type ttype)
 {
 	struct ice_flow_seg_info *seg;
 	struct ice_flow_seg_info *seg_tun = NULL;
 	enum ice_flow_field field[ICE_FLOW_FIELD_IDX_MAX];
+	bool is_tunnel;
 	int i, ret;
 
 	if (!input_set)
@@ -836,8 +988,15 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_TCP:
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_ICMP:
 	case ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER:
-		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_EH |
-				  ICE_FLOW_SEG_HDR_IPV4);
+		if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_IP |
+					  ICE_FLOW_SEG_HDR_IPV4);
+		else if (ttype == ICE_FDIR_TUNNEL_TYPE_GTPU_EH)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_GTPU_EH |
+					  ICE_FLOW_SEG_HDR_GTPU_IP |
+					  ICE_FLOW_SEG_HDR_IPV4);
+		else
+			PMD_DRV_LOG(ERR, "not supported tunnel type.");
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "not supported filter type.");
@@ -851,6 +1010,7 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 				 ICE_FLOW_FLD_OFF_INVAL, false);
 	}
 
+	is_tunnel = ice_fdir_is_tunnel_profile(ttype);
 	if (!is_tunnel) {
 		ret = ice_fdir_hw_tbl_conf(pf, pf->main_vsi, pf->fdir.fdir_vsi,
 					   seg, flow, false);
@@ -873,7 +1033,7 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 		rte_free(seg);
 		if (is_tunnel)
 			rte_free(seg_tun);
-		return (ret == -EAGAIN) ? 0 : ret;
+		return (ret == -EEXIST) ? 0 : ret;
 	} else {
 		return ret;
 	}
@@ -1075,7 +1235,7 @@ ice_fdir_create_filter(struct ice_adapter *ad,
 	is_tun = ice_fdir_is_tunnel_profile(filter->tunnel_type);
 
 	ret = ice_fdir_input_set_conf(pf, filter->input.flow_type,
-			filter->input_set, is_tun);
+			filter->input_set, filter->tunnel_type);
 	if (ret) {
 		rte_flow_error_set(error, -ret,
 				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -1339,8 +1499,7 @@ ice_fdir_parse_action(struct ice_adapter *ad,
 			dest_num++;
 
 			filter->input.dest_ctl =
-				ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_QINDEX;
-			filter->input.q_index = 0;
+				ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_OTHER;
 			break;
 		case RTE_FLOW_ACTION_TYPE_RSS:
 			dest_num++;
@@ -1355,6 +1514,7 @@ ice_fdir_parse_action(struct ice_adapter *ad,
 
 			mark_spec = actions->conf;
 			filter->input.fltr_id = mark_spec->id;
+			filter->input.fdid_prio = ICE_FXD_FLTR_QW1_FDID_PRI_ONE;
 			break;
 		case RTE_FLOW_ACTION_TYPE_COUNT:
 			counter_num++;
@@ -1373,7 +1533,7 @@ ice_fdir_parse_action(struct ice_adapter *ad,
 		}
 	}
 
-	if (dest_num == 0 || dest_num >= 2) {
+	if (dest_num >= 2) {
 		rte_flow_error_set(error, EINVAL,
 			   RTE_FLOW_ERROR_TYPE_ACTION, actions,
 			   "Unsupported action combination");
@@ -1393,6 +1553,18 @@ ice_fdir_parse_action(struct ice_adapter *ad,
 			   "Too many count actions");
 		return -rte_errno;
 	}
+
+	if (dest_num + mark_num + counter_num == 0) {
+		rte_flow_error_set(error, EINVAL,
+			   RTE_FLOW_ERROR_TYPE_ACTION, actions,
+			   "Empty action");
+		return -rte_errno;
+	}
+
+	/* set default action to PASSTHRU mode, in "mark/count only" case. */
+	if (dest_num == 0)
+		filter->input.dest_ctl =
+			ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_OTHER;
 
 	return 0;
 }
@@ -1733,6 +1905,8 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 
 				filter->input.gtpu_data.teid = gtp_spec->teid;
 			}
+
+			tunnel_type = ICE_FDIR_TUNNEL_TYPE_GTPU;
 			break;
 		case RTE_FLOW_ITEM_TYPE_GTP_PSC:
 			gtp_psc_spec = item->spec;
@@ -1745,8 +1919,7 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 				filter->input.gtpu_data.qfi =
 					gtp_psc_spec->qfi;
 			}
-
-			tunnel_type = ICE_FDIR_TUNNEL_TYPE_GTPU;
+			tunnel_type = ICE_FDIR_TUNNEL_TYPE_GTPU_EH;
 			break;
 		default:
 			rte_flow_error_set(error, EINVAL,
@@ -1757,7 +1930,8 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 		}
 	}
 
-	if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU)
+	if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU ||
+	    tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU_EH)
 		flow_type = ICE_FLTR_PTYPE_NONF_IPV4_GTPU_IPV4_OTHER;
 
 	filter->tunnel_type = tunnel_type;
@@ -1789,23 +1963,26 @@ ice_fdir_parse(struct ice_adapter *ad,
 
 	ret = ice_fdir_parse_pattern(ad, pattern, error, filter);
 	if (ret)
-		return ret;
+		goto error;
 	input_set = filter->input_set;
 	if (!input_set || input_set & ~item->input_set_mask) {
 		rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_ITEM_SPEC,
 				   pattern,
 				   "Invalid input set");
-		return -rte_errno;
+		ret = -rte_errno;
+		goto error;
 	}
 
 	ret = ice_fdir_parse_action(ad, actions, error, filter);
 	if (ret)
-		return ret;
+		goto error;
 
-	*meta = filter;
-
-	return 0;
+	if (meta)
+		*meta = filter;
+error:
+	rte_free(item);
+	return ret;
 }
 
 static struct ice_flow_parser ice_fdir_parser_os = {

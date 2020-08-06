@@ -315,9 +315,9 @@ virtio_user_fill_intr_handle(struct virtio_user_dev *dev)
 
 static void
 virtio_user_mem_event_cb(enum rte_mem_event type __rte_unused,
-						 const void *addr __rte_unused,
-						 size_t len __rte_unused,
-						 void *arg)
+			 const void *addr,
+			 size_t len __rte_unused,
+			 void *arg)
 {
 	struct virtio_user_dev *dev = arg;
 	struct rte_memseg_list *msl;
@@ -537,7 +537,8 @@ virtio_user_dev_uninit(struct virtio_user_dev *dev)
 		close(dev->kickfds[i]);
 	}
 
-	close(dev->vhostfd);
+	if (dev->vhostfd >= 0)
+		close(dev->vhostfd);
 
 	if (dev->is_server && dev->listenfd >= 0) {
 		close(dev->listenfd);
@@ -545,8 +546,11 @@ virtio_user_dev_uninit(struct virtio_user_dev *dev)
 	}
 
 	if (dev->vhostfds) {
-		for (i = 0; i < dev->max_queue_pairs; ++i)
+		for (i = 0; i < dev->max_queue_pairs; ++i) {
 			close(dev->vhostfds[i]);
+			if (dev->tapfds[i] >= 0)
+				close(dev->tapfds[i]);
+		}
 		free(dev->vhostfds);
 		free(dev->tapfds);
 	}

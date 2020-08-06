@@ -1,34 +1,8 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2014-2018 Netronome Systems, Inc.
  * All rights reserved.
  *
  * Small portions derived from code Copyright(c) 2010-2015 Intel Corporation.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *  this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *  notice, this list of conditions and the following disclaimer in the
- *  documentation and/or other materials provided with the distribution
- *
- * 3. Neither the name of the copyright holder nor the names of its
- *  contributors may be used to endorse or promote products derived from this
- *  software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 /*
@@ -3040,7 +3014,7 @@ nfp_cpp_bridge_serve_write(int sockfd, struct nfp_cpp *cpp)
 	size_t count, curlen, totlen = 0;
 	int err = 0;
 
-	PMD_CPP_LOG(DEBUG, "%s: offset size %lu, count_size: %lu\n", __func__,
+	PMD_CPP_LOG(DEBUG, "%s: offset size %zu, count_size: %zu\n", __func__,
 		sizeof(off_t), sizeof(size_t));
 
 	/* Reading the count param */
@@ -3059,9 +3033,9 @@ nfp_cpp_bridge_serve_write(int sockfd, struct nfp_cpp *cpp)
 	cpp_id = (offset >> 40) << 8;
 	nfp_offset = offset & ((1ull << 40) - 1);
 
-	PMD_CPP_LOG(DEBUG, "%s: count %lu and offset %ld\n", __func__, count,
+	PMD_CPP_LOG(DEBUG, "%s: count %zu and offset %jd\n", __func__, count,
 		offset);
-	PMD_CPP_LOG(DEBUG, "%s: cpp_id %08x and nfp_offset %ld\n", __func__,
+	PMD_CPP_LOG(DEBUG, "%s: cpp_id %08x and nfp_offset %jd\n", __func__,
 		cpp_id, nfp_offset);
 
 	/* Adjust length if not aligned */
@@ -3093,12 +3067,12 @@ nfp_cpp_bridge_serve_write(int sockfd, struct nfp_cpp *cpp)
 			if (len > sizeof(tmpbuf))
 				len = sizeof(tmpbuf);
 
-			PMD_CPP_LOG(DEBUG, "%s: Receive %u of %lu\n", __func__,
+			PMD_CPP_LOG(DEBUG, "%s: Receive %u of %zu\n", __func__,
 					   len, count);
 			err = recv(sockfd, tmpbuf, len, MSG_WAITALL);
 			if (err != (int)len) {
 				RTE_LOG(ERR, PMD,
-					"%s: error when receiving, %d of %lu\n",
+					"%s: error when receiving, %d of %zu\n",
 					__func__, err, count);
 				nfp_cpp_area_release(area);
 				nfp_cpp_area_free(area);
@@ -3142,7 +3116,7 @@ nfp_cpp_bridge_serve_read(int sockfd, struct nfp_cpp *cpp)
 	size_t count, curlen, totlen = 0;
 	int err = 0;
 
-	PMD_CPP_LOG(DEBUG, "%s: offset size %lu, count_size: %lu\n", __func__,
+	PMD_CPP_LOG(DEBUG, "%s: offset size %zu, count_size: %zu\n", __func__,
 		sizeof(off_t), sizeof(size_t));
 
 	/* Reading the count param */
@@ -3161,9 +3135,9 @@ nfp_cpp_bridge_serve_read(int sockfd, struct nfp_cpp *cpp)
 	cpp_id = (offset >> 40) << 8;
 	nfp_offset = offset & ((1ull << 40) - 1);
 
-	PMD_CPP_LOG(DEBUG, "%s: count %lu and offset %ld\n", __func__, count,
+	PMD_CPP_LOG(DEBUG, "%s: count %zu and offset %jd\n", __func__, count,
 			   offset);
-	PMD_CPP_LOG(DEBUG, "%s: cpp_id %08x and nfp_offset %ld\n", __func__,
+	PMD_CPP_LOG(DEBUG, "%s: cpp_id %08x and nfp_offset %jd\n", __func__,
 			   cpp_id, nfp_offset);
 
 	/* Adjust length if not aligned */
@@ -3200,13 +3174,13 @@ nfp_cpp_bridge_serve_read(int sockfd, struct nfp_cpp *cpp)
 				nfp_cpp_area_free(area);
 				return -EIO;
 			}
-			PMD_CPP_LOG(DEBUG, "%s: sending %u of %lu\n", __func__,
+			PMD_CPP_LOG(DEBUG, "%s: sending %u of %zu\n", __func__,
 					   len, count);
 
 			err = send(sockfd, tmpbuf, len, 0);
 			if (err != (int)len) {
 				RTE_LOG(ERR, PMD,
-					"%s: error when sending: %d of %lu\n",
+					"%s: error when sending: %d of %zu\n",
 					__func__, err, count);
 				nfp_cpp_area_release(area);
 				nfp_cpp_area_free(area);
@@ -3477,9 +3451,10 @@ nfp_pf_create_dev(struct rte_pci_device *dev, int port, int ports,
 probe_failed:
 	rte_free(port_name);
 	/* free ports private data if primary process */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		rte_free(eth_dev->data->dev_private);
-
+		eth_dev->data->dev_private = NULL;
+	}
 	rte_eth_dev_release_port(eth_dev);
 
 	return retval;

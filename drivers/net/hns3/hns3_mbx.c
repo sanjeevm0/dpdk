@@ -24,7 +24,6 @@
 #include "hns3_logs.h"
 #include "hns3_intr.h"
 
-#define HNS3_REG_MSG_DATA_OFFSET	4
 #define HNS3_CMD_CODE_OFFSET		2
 
 static const struct errno_respcode_map err_code_map[] = {
@@ -151,6 +150,8 @@ hns3_send_mbx_msg(struct hns3_hw *hw, uint16_t code, uint16_t subcode,
 {
 	struct hns3_mbx_vf_to_pf_cmd *req;
 	struct hns3_cmd_desc desc;
+	bool is_ring_vector_msg;
+	int offset;
 	int ret;
 
 	req = (struct hns3_mbx_vf_to_pf_cmd *)desc.data;
@@ -165,9 +166,15 @@ hns3_send_mbx_msg(struct hns3_hw *hw, uint16_t code, uint16_t subcode,
 
 	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_MBX_VF_TO_PF, false);
 	req->msg[0] = code;
-	req->msg[1] = subcode;
-	if (msg_data)
-		memcpy(&req->msg[HNS3_CMD_CODE_OFFSET], msg_data, msg_len);
+	is_ring_vector_msg = (code == HNS3_MBX_MAP_RING_TO_VECTOR) ||
+			     (code == HNS3_MBX_UNMAP_RING_TO_VECTOR) ||
+			     (code == HNS3_MBX_GET_RING_VECTOR_MAP);
+	if (!is_ring_vector_msg)
+		req->msg[1] = subcode;
+	if (msg_data) {
+		offset = is_ring_vector_msg ? 1 : HNS3_CMD_CODE_OFFSET;
+		memcpy(&req->msg[offset], msg_data, msg_len);
+	}
 
 	/* synchronous send */
 	if (need_resp) {
@@ -212,6 +219,7 @@ hns3_mbx_handler(struct hns3_hw *hw)
 	struct hns3_mac *mac = &hw->mac;
 	enum hns3_reset_level reset_level;
 	uint16_t *msg_q;
+	uint8_t opcode;
 	uint32_t tail;
 
 	tail = hw->arq.tail;
@@ -220,7 +228,8 @@ hns3_mbx_handler(struct hns3_hw *hw)
 	while (tail != hw->arq.head) {
 		msg_q = hw->arq.msg_q[hw->arq.head];
 
-		switch (msg_q[0]) {
+		opcode = msg_q[0] & 0xff;
+		switch (opcode) {
 		case HNS3_MBX_LINK_STAT_CHANGE:
 			memcpy(&mac->link_speed, &msg_q[2],
 				   sizeof(mac->link_speed));
@@ -242,7 +251,7 @@ hns3_mbx_handler(struct hns3_hw *hw)
 			break;
 		default:
 			hns3_err(hw, "Fetched unsupported(%d) message from arq",
-				 msg_q[0]);
+				 opcode);
 			break;
 		}
 
@@ -292,6 +301,7 @@ hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 	struct hns3_cmd_desc *desc;
 	uint32_t msg_data;
 	uint16_t *msg_q;
+	uint8_t opcode;
 	uint16_t flag;
 	uint8_t *temp;
 	int i;
@@ -302,12 +312,13 @@ hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 
 		desc = &crq->desc[crq->next_to_use];
 		req = (struct hns3_mbx_pf_to_vf_cmd *)desc->data;
+		opcode = req->msg[0] & 0xff;
 
 		flag = rte_le_to_cpu_16(crq->desc[crq->next_to_use].flag);
 		if (unlikely(!hns3_get_bit(flag, HNS3_CMDQ_RX_OUTVLD_B))) {
 			hns3_warn(hw,
 				  "dropped invalid mailbox message, code = %d",
-				  req->msg[0]);
+				  opcode);
 
 			/* dropping/not processing this invalid message */
 			crq->desc[crq->next_to_use].flag = 0;
@@ -315,13 +326,12 @@ hns3_dev_handle_mbx_msg(struct hns3_hw *hw)
 			continue;
 		}
 
-		switch (req->msg[0]) {
+		switch (opcode) {
 		case HNS3_MBX_PF_VF_RESP:
 			resp->resp_status = hns3_resp_to_errno(req->msg[3]);
 
 			temp = (uint8_t *)&req->msg[4];
-			for (i = 0; i < HNS3_MBX_MAX_RESP_DATA_SIZE &&
-			     i < HNS3_REG_MSG_DATA_OFFSET; i++) {
+			for (i = 0; i < HNS3_MBX_MAX_RESP_DATA_SIZE; i++) {
 				resp->additional_info[i] = *temp;
 				temp++;
 			}

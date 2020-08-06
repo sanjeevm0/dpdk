@@ -305,7 +305,7 @@ IOVA = VA: Support
 
 KNI operates in IOVA_VA scheme when
 
-- LINUX_VERSION_CODE > KERNEL_VERSION(4, 9, 0) and
+- LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0) and
 - EAL option `iova-mode=va` is passed or bus IOVA scheme in the DPDK is selected
   as RTE_IOVA_VA.
 
@@ -321,4 +321,3 @@ Ethtool is a Linux-specific tool with corresponding support in the kernel.
 The current version of kni provides minimal ethtool functionality
 including querying version and link state. It does not support link
 control, statistics, or dumping device registers.
-

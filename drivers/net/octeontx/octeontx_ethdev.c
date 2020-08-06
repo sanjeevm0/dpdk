@@ -308,7 +308,7 @@ octeontx_dev_configure(struct rte_eth_dev *dev)
 
 	nic->num_tx_queues = dev->data->nb_tx_queues;
 
-	ret = octeontx_pko_channel_open(nic->port_id * PKO_VF_NUM_DQ,
+	ret = octeontx_pko_channel_open(nic->pko_vfid * PKO_VF_NUM_DQ,
 					nic->num_tx_queues,
 					nic->base_ochan);
 	if (ret) {
@@ -350,6 +350,10 @@ octeontx_dev_close(struct rte_eth_dev *dev)
 
 		rte_free(txq);
 	}
+
+	/* Free MAC address table */
+	rte_free(dev->data->mac_addrs);
+	dev->data->mac_addrs = NULL;
 
 	dev->tx_pkt_burst = NULL;
 	dev->rx_pkt_burst = NULL;
@@ -604,6 +608,8 @@ octeontx_dev_info(struct rte_eth_dev *dev,
 
 	dev_info->rx_offload_capa = OCTEONTX_RX_OFFLOADS;
 	dev_info->tx_offload_capa = OCTEONTX_TX_OFFLOADS;
+	dev_info->rx_queue_offload_capa = OCTEONTX_RX_OFFLOADS;
+	dev_info->tx_queue_offload_capa = OCTEONTX_TX_OFFLOADS;
 
 	return 0;
 }
@@ -719,7 +725,7 @@ octeontx_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 	RTE_SET_USED(nb_desc);
 	RTE_SET_USED(socket_id);
 
-	dq_num = (nic->port_id * PKO_VF_NUM_DQ) + qidx;
+	dq_num = (nic->pko_vfid * PKO_VF_NUM_DQ) + qidx;
 
 	/* Socket id check */
 	if (socket_id != (unsigned int)SOCKET_ID_ANY &&
@@ -1001,6 +1007,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 			int socket_id)
 {
 	int res;
+	size_t pko_vfid;
 	char octtx_name[OCTEONTX_MAX_NAME_LEN];
 	struct octeontx_nic *nic = NULL;
 	struct rte_eth_dev *eth_dev = NULL;
@@ -1039,7 +1046,15 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 		goto err;
 	}
 	data->dev_private = nic;
+	pko_vfid = octeontx_pko_get_vfid();
 
+	if (pko_vfid == SIZE_MAX) {
+		octeontx_log_err("failed to get pko vfid");
+		res = -ENODEV;
+		goto err;
+	}
+
+	nic->pko_vfid = pko_vfid;
 	nic->port_id = port;
 	nic->evdev = evdev;
 
@@ -1088,7 +1103,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 		octeontx_log_err("eth_dev->port_id (%d) is diff to orig (%d)",
 				data->port_id, nic->port_id);
 		res = -EINVAL;
-		goto err;
+		goto free_mac_addrs;
 	}
 
 	/* Update port_id mac to eth_dev */
@@ -1107,6 +1122,9 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	rte_eth_dev_probing_finish(eth_dev);
 	return data->port_id;
 
+free_mac_addrs:
+	rte_free(data->mac_addrs);
+	data->mac_addrs = NULL;
 err:
 	if (nic)
 		octeontx_port_close(nic);

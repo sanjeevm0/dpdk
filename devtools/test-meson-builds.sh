@@ -12,8 +12,11 @@ PIPEFAIL=""
 set -o | grep -q pipefail && set -o pipefail && PIPEFAIL=1
 
 srcdir=$(dirname $(readlink -f $0))/..
+. $srcdir/devtools/load-devel-config
+
 MESON=${MESON:-meson}
 use_shared="--default-library=shared"
+builds_dir=${DPDK_BUILD_TEST_DIR:-.}
 
 if command -v gmake >/dev/null 2>&1 ; then
 	MAKE=gmake
@@ -36,12 +39,18 @@ fi
 
 default_path=$PATH
 default_pkgpath=$PKG_CONFIG_PATH
+default_cppflags=$CPPFLAGS
+default_cflags=$CFLAGS
+default_ldflags=$LDFLAGS
 
 load_env () # <target compiler>
 {
 	targetcc=$1
 	export PATH=$default_path
 	export PKG_CONFIG_PATH=$default_pkgpath
+	export CPPFLAGS=$default_cppflags
+	export CFLAGS=$default_cflags
+	export LDFLAGS=$default_ldflags
 	unset DPDK_MESON_OPTIONS
 	command -v $targetcc >/dev/null 2>&1 || return 1
 	DPDK_TARGET=$($targetcc -v 2>&1 | sed -n 's,^Target: ,,p')
@@ -50,7 +59,7 @@ load_env () # <target compiler>
 
 build () # <directory> <target compiler> <meson options>
 {
-	builddir=$1
+	builddir=$builds_dir/$1
 	shift
 	targetcc=$1
 	shift
@@ -125,8 +134,8 @@ done
 
 # Test installation of the x86-default target, to be used for checking
 # the sample apps build using the pkg-config file for cflags and libs
-build_path=build-x86-default
-export DESTDIR=$(pwd)/$build_path/install-root
+build_path=$(readlink -f $builds_dir/build-x86-default)
+export DESTDIR=$build_path/install-root
 $ninja_cmd -C $build_path install
 
 load_env cc

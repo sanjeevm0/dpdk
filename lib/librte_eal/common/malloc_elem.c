@@ -171,7 +171,7 @@ malloc_elem_insert(struct malloc_elem *elem)
 		next_elem = NULL;
 		heap->last = elem;
 	} else {
-		/* the new memory is somewhere inbetween start and end */
+		/* the new memory is somewhere between start and end */
 		uint64_t dist_from_start, dist_from_end;
 
 		dist_from_end = RTE_PTR_DIFF(heap->last, elem);
@@ -487,6 +487,10 @@ join_elem(struct malloc_elem *elem1, struct malloc_elem *elem2)
 	else
 		elem1->heap->last = elem1;
 	elem1->next = next;
+	if (elem1->pad) {
+		struct malloc_elem *inner = RTE_PTR_ADD(elem1, elem1->pad);
+		inner->size = elem1->size - elem1->pad;
+	}
 }
 
 struct malloc_elem *

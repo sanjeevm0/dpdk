@@ -14,8 +14,9 @@
 #include "otx2_dev.h"
 #include "otx2_ethdev.h"
 #include "otx2_mempool.h"
+#include "otx2_tim_evdev.h"
 
-#define EVENTDEV_NAME_OCTEONTX2_PMD otx2_eventdev
+#define EVENTDEV_NAME_OCTEONTX2_PMD event_octeontx2
 
 #define sso_func_trace otx2_sso_dbg
 
@@ -137,9 +138,12 @@ struct otx2_sso_evdev {
 	struct rte_mempool *xaq_pool;
 	uint64_t rx_offloads;
 	uint64_t tx_offloads;
+	uint64_t adptr_xae_cnt;
 	uint16_t rx_adptr_pool_cnt;
-	uint32_t adptr_xae_cnt;
 	uint64_t *rx_adptr_pools;
+	uint16_t tim_adptr_ring_cnt;
+	uint16_t *timer_adptr_rings;
+	uint64_t *timer_adptr_sz;
 	/* Dev args */
 	uint8_t dual_ws;
 	uint8_t selftest;

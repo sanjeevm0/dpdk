@@ -891,6 +891,8 @@ eth_igb_dev_init(struct rte_eth_dev *eth_dev)
 	/* enable support intr */
 	igb_intr_enable(eth_dev);
 
+	eth_igb_dev_set_link_down(eth_dev);
+
 	/* initialize filter info */
 	memset(filter_info, 0,
 	       sizeof(struct e1000_filter_info));
@@ -920,7 +922,7 @@ eth_igb_dev_uninit(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return -EPERM;
+		return 0;
 
 	eth_igb_close(eth_dev);
 
@@ -1041,7 +1043,7 @@ eth_igbvf_dev_uninit(struct rte_eth_dev *eth_dev)
 	PMD_INIT_FUNC_TRACE();
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return -EPERM;
+		return 0;
 
 	igbvf_dev_close(eth_dev);
 
